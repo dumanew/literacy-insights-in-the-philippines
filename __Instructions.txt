@@ -1,0 +1,26 @@
+1. Install Python
+
+https://www.python.org/downloads/ 
+
+2. Install pip
+
+https://pip.pypa.io/en/stable/installation/
+
+3. Open the console terminal on the same folder where the "CMSC 205 Final Exam.ipynb" file is located. 
+
+4. On the terminal, run the following to install the necessary Python packages to open the dashboard:
+
+pip install pandas dash plotly scipy jupyterlab notebook
+
+5. Once the packages have been installed, open the Jupyter Notebook by typing the following in the same terminal:
+
+jupyter notebook
+
+5.A If Jupyter Notebook does not open on its own, copy the local host below on your browser without cancelling Step 5:
+
+http://localhost:8888/tree
+
+6. Once Jupyter Notebook is open, click on the "CMSC 205 Final Exam.ipynb" file to open the notebook.
+
+7. On the Menu bar, click Run then select Run All Cells. The dashboard should now open on a new tab.
+

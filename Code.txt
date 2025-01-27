@@ -1,0 +1,235 @@
+# Import the packages
+import pandas as pd
+import numpy as np
+import webbrowser
+
+import dash
+from dash import dcc, html, callback_context
+from dash.dependencies import Input, Output
+
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.offline import init_notebook_mode
+
+from threading import Timer
+
+init_notebook_mode(connected=True)
+
+
+# Load the dataset
+data_file = "CMSC 205 data.csv"
+data = pd.read_csv(data_file, encoding='utf-8', encoding_errors='replace')
+
+# Filter valid rows
+# Negros Region is removed as the provinces of Negros Occidental and Negros Oriental 
+# were separated and became Negros Island Region in May 2015. In 2017 this was cancelled, and they reverted to Western Visayas and Central Visayas, 
+# respectively. Hence, it is not included in the interpretation of the dataset.
+
+data_filtered = data[
+    (data['admin1_name'] != "Negros Island Region (NIR)") &
+    (data['admin1_name'] != "#adm1+name") &
+    (data['admin1_name'].notna()) &
+    (data['admin1_name'] != "")
+]
+
+# Preprocess the data
+data_filtered['literacy_male'] = pd.to_numeric(data_filtered['literacy_male'], errors='coerce')
+data_filtered['literacy_female'] = pd.to_numeric(data_filtered['literacy_female'], errors='coerce')
+data_filtered['literacy_all'] = pd.to_numeric(data_filtered['literacy_all'], errors='coerce')
+data_filtered['main_language_share'] = pd.to_numeric(data_filtered['main_language_share'], errors='coerce')
+data_filtered['number_of_named_languages'] = pd.to_numeric(data_filtered['number_of_named_languages'], errors='coerce')
+data_filtered['pop_total'] = pd.to_numeric(data_filtered['pop_total'], errors='coerce')
+
+data_filtered['gender_gap'] = data_filtered['literacy_female'] - data_filtered['literacy_male']
+data_filtered['color'] = data_filtered['gender_gap'].apply(lambda x: 'pink' if x > 0 else 'blue')
+data_filtered['gender_label'] = data_filtered['color'].map({'pink': 'Female', 'blue': 'Male'})
+
+# Add percentage columns for hover
+data_filtered['literacy_all_percent'] = data_filtered['literacy_all'] * 100
+data_filtered['main_language_share_percent'] = data_filtered['main_language_share'] * 100
+
+# Initialize the Dash app
+app = dash.Dash(__name__)
+
+# Layout
+app.layout = html.Div([
+    html.Div([
+        html.H2("Regions"),
+        dcc.Checklist(
+            id='region-checkboxes',
+            options=[{'label': region, 'value': region} for region in data_filtered['admin1_name'].dropna().unique()],
+            value=data_filtered['admin1_name'].dropna().unique(),
+            inline=False
+        ),
+        html.Button("Select All", id="select-all-button", n_clicks=0),
+        html.Button("Clear All", id="clear-all-button", n_clicks=0),
+        html.Div([
+            html.P("**Gender Gap in Literacy**: Pink bars show female literacy and blue bars show male literacy. The longer the bar, the wider the literacy gap in each region. For many Philippine regions, women often have higher literacy rates."),
+            html.P("**Population Density and Literacy**: A positive slope indicates a trend of higher literacy rates with increasing population. However, the relationship is not statistically significant due to the p-value being 0.1774 (17.74%) which is more than the 5% significance threshold."),
+            html.P("**Language Diversity and Literacy**: More languages in a region slightly decrease literacy rates on average. This relationship is not statistically significant due to the p-value being 0.5257 (52.57%) which is more than the 5% significance threshold."),
+            html.P("**Dominant Language and Literacy**: Dominant language share strongly influences literacy rates, with a significant positive correlation as indicated the p-value of 0.01084 (1.08%) which is beneath the 5% significance level."),
+            html.P("You can hover over the bars, dots, and lines on the charts to see more information."),
+        ], style={'padding-top': '10px'})
+    ], style={'width': '20%', 'display': 'inline-block', 'verticalAlign': 'top', 'padding': '20px'}),
+
+    html.Div([
+        html.Div([dcc.Graph(id='chart-gender-gap')], style={'width': '45%', 'display': 'inline-block'}),
+        html.Div([dcc.Graph(id='chart-pop-density')], style={'width': '45%', 'display': 'inline-block'}),
+        html.Div([dcc.Graph(id='chart-language-diversity')], style={'width': '45%', 'display': 'inline-block'}),
+        html.Div([dcc.Graph(id='chart-dominant-language')], style={'width': '45%', 'display': 'inline-block'}),
+    ], style={'width': '75%', 'display': 'inline-block'})
+])
+
+@app.callback(
+    Output('region-checkboxes', 'value'),
+    [Input('select-all-button', 'n_clicks'),
+     Input('clear-all-button', 'n_clicks')],
+    [Input('region-checkboxes', 'value')]
+)
+def update_checklist(select_all_clicks, clear_all_clicks, current_values):
+    ctx = callback_context
+    if ctx.triggered:
+        button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+        if button_id == 'select-all-button':
+            return data_filtered['admin1_name'].dropna().unique()
+        elif button_id == 'clear-all-button':
+            return []
+    return current_values
+
+@app.callback(
+    [Output('chart-gender-gap', 'figure'),
+     Output('chart-pop-density', 'figure'),
+     Output('chart-language-diversity', 'figure'),
+     Output('chart-dominant-language', 'figure')],
+    [Input('region-checkboxes', 'value')]
+)
+def update_charts(selected_regions):
+    if not selected_regions:
+        return [go.Figure(), go.Figure(), go.Figure(), go.Figure()]
+
+    filtered_data = data_filtered[data_filtered['admin1_name'].isin(selected_regions)].copy()
+
+    # Ensure numeric conversion for relevant columns
+    filtered_data['pop_total'] = pd.to_numeric(filtered_data['pop_total'], errors='coerce')
+    filtered_data['literacy_all'] = pd.to_numeric(filtered_data['literacy_all'], errors='coerce')
+
+    # Drop rows with missing values in required columns
+    filtered_data = filtered_data.dropna(subset=['pop_total', 'literacy_all'])
+
+    # Chart 1: Gender Gap in Literacy
+    fig_gender_gap = px.bar(
+        filtered_data,
+        x='admin1_name',
+        y='gender_gap',
+        title="Gender Gap in Literacy",
+        labels={'admin1_name': 'Region', 'gender_gap': 'Gender Gap (Female - Male)', 'gender_label': 'Gender Label'},
+        color='gender_label',
+        color_discrete_map={'Male': 'blue', 'Female': 'pink'},
+    )
+    fig_gender_gap.update_traces(
+        hovertemplate="Region: %{x}<br>Gender Gap: %{y:.4f}"
+    )
+
+    # Chart 2: Population Density and Literacy
+    fig_pop_density = px.scatter(
+        filtered_data,
+        x='pop_total',
+        y='literacy_all',
+        title="Population Density and Literacy",
+        labels={'pop_total': 'Population Total', 'literacy_all': 'Literacy Rate (%)'},
+        hover_name='admin1_name',
+        custom_data=['admin1_name', 'literacy_all_percent']
+    )
+    if len(filtered_data['pop_total'].unique()) > 1:
+        slope, intercept, r_value, p_value, _ = linregress(filtered_data['pop_total'], filtered_data['literacy_all'])
+        regression_line = slope * filtered_data['pop_total'] + intercept
+        r_squared = r_value ** 2
+        fig_pop_density.add_trace(
+            go.Scatter(
+                x=filtered_data['pop_total'],
+                y=regression_line,
+                mode='lines',
+                line=dict(color='red'),
+                name='',  # Avoid showing "Trace 1"
+                showlegend=False,
+                hovertemplate=f"R²: {r_squared:.4f}<br>P-value: {p_value:.4f}"
+            )
+        )
+    fig_pop_density.update_traces(
+        hovertemplate="Region: %{customdata[0]}<br>Literacy Rate: %{customdata[1]:.2f}%<br>Population Total: %{x}",
+        selector=dict(mode='markers')
+    )
+
+    # Chart 3: Language Diversity and Literacy
+    fig_lang_diversity = px.scatter(
+        filtered_data,
+        x='number_of_named_languages',
+        y='literacy_all',
+        title="Language Diversity and Literacy",
+        labels={'number_of_named_languages': 'Number of Languages', 'literacy_all': 'Literacy Rate (%)'},
+        hover_name='admin1_name',
+        custom_data=['admin1_name', 'literacy_all_percent']
+    )
+    if len(filtered_data['number_of_named_languages'].unique()) > 1:
+        slope, intercept, r_value, p_value, _ = linregress(filtered_data['number_of_named_languages'], filtered_data['literacy_all'])
+        regression_line = slope * filtered_data['number_of_named_languages'] + intercept
+        r_squared = r_value ** 2
+        fig_lang_diversity.add_trace(
+            go.Scatter(
+                x=filtered_data['number_of_named_languages'],
+                y=regression_line,
+                mode='lines',
+                line=dict(color='red'),
+                name='',  # Avoid showing "Trace 1"
+                showlegend=False,
+                hovertemplate=f"R²: {r_squared:.4f}<br>P-value: {p_value:.4f}"
+            )
+        )
+    fig_lang_diversity.update_traces(
+        hovertemplate="Region: %{customdata[0]}<br>Literacy Rate: %{customdata[1]:.2f}%<br>Number of Languages: %{x}",
+        selector=dict(mode='markers')
+    )
+
+    # Chart 4: Dominant Language and Literacy
+    fig_dom_lang = px.scatter(
+        filtered_data,
+        x='main_language_share',
+        y='literacy_all',
+        title="Dominant Language and Literacy",
+        labels={'main_language_share': 'Language Share (%)', 'literacy_all': 'Literacy Rate (%)'},
+        hover_name='admin1_name',
+        custom_data=['admin1_name', 'main_language', 'main_language_share_percent', 'literacy_all_percent']
+    )
+    if len(filtered_data['main_language_share'].unique()) > 1:
+        slope, intercept, r_value, p_value, _ = linregress(filtered_data['main_language_share'], filtered_data['literacy_all'])
+        regression_line = slope * filtered_data['main_language_share'] + intercept
+        r_squared = r_value ** 2
+        fig_dom_lang.add_trace(
+            go.Scatter(
+                x=filtered_data['main_language_share'],
+                y=regression_line,
+                mode='lines',
+                line=dict(color='red'),
+                name='',  # Avoid showing "Trace 1"
+                showlegend=False,
+                hovertemplate=f"R²: {r_squared:.4f}<br>P-value: {p_value:.4f}"
+            )
+        )
+    fig_dom_lang.update_traces(
+        hovertemplate=(
+            "Region: %{customdata[0]}<br>"
+            "Main Language: %{customdata[1]}<br>"
+            "Main Language Share: %{customdata[2]:.2f}%<br>"
+            "Literacy Rate: %{customdata[3]:.2f}%"
+        ),
+        selector=dict(mode='markers')
+    )
+
+    return fig_gender_gap, fig_pop_density, fig_lang_diversity, fig_dom_lang
+
+def open_browser():
+    webbrowser.open_new("http://127.0.0.1:8050/")
+
+if __name__ == '__main__':
+    Timer(1, open_browser).start()
+    app.run_server(debug=True, use_reloader=False)
